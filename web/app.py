@@ -30,6 +30,7 @@ load_dotenv(_ROOT / ".env")
 
 from sources.gmail import GmailSource
 from sources.google_calendar import GoogleCalendarSource
+from sources.notion import NotionSource, NotionTask
 
 app = Flask(__name__, template_folder="templates")
 app.debug = True
@@ -56,7 +57,7 @@ Rules:
 - today_schedule: attendee_has_email=true if that attendee also sent an unread email.
 - flags: [] if nothing to flag.
 - inbox: every email in exactly one category; draft_reply only for urgent/needs_reply.
-- meeting_requests: is_reschedule=true for reschedule/move asks; [] if none found."""
+- meeting_requests: Capture ANY email that contains scheduling intent — this includes: explicit meeting requests ("let's meet", "can we connect", "I'd like to schedule"), questions about availability ("are you free", "what times work", "do you have time"), requests to reschedule or move an existing meeting, invitations to calls, demos, or site visits, and any email where a date/time is proposed or asked about. When in doubt, include it. is_reschedule=true for reschedule/move asks; [] only if there is genuinely no scheduling intent in any email."""
 
 _DASHBOARD_USER = """\
 Today is {today}. Tomorrow is {tomorrow}.
@@ -402,6 +403,112 @@ def add_event():
         )
         return jsonify({"ok": True, "link": created.get("htmlLink", "")})
     except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/extract-tasks", methods=["POST"])
+def extract_tasks():
+    """Extract action items from pre-fetched dashboard data using Claude."""
+    from briefing.tasks import _TASKS_SYSTEM, _TASKS_USER
+
+    t0 = time.perf_counter()
+    print(f"[/api/extract-tasks] start", flush=True)
+
+    raw_data = request.get_json(force=True) or {}
+    try:
+        today = date.today()
+        tomorrow = today + timedelta(days=1)
+
+        emails = raw_data.get("emails", [])
+        today_schedule = raw_data.get("today_schedule", [])
+        tomorrow_schedule = raw_data.get("tomorrow_schedule", [])
+
+        email_lines = []
+        for e in emails:
+            email_lines.append(
+                f"[{e['id']}] {e.get('subject', '(no subject)')}\n"
+                f"  From: {e.get('from_name', '')} <{e.get('from_email', '')}>\n"
+                f"  {e.get('snippet', '')}"
+            )
+        email_data = "\n\n".join(email_lines) if email_lines else "(no emails)"
+
+        def _fmt_events(events):
+            if not events:
+                return "(none)"
+            return "\n".join(
+                f"[{i}] {ev['time']}: {ev['title']} — "
+                f"{', '.join(ev.get('attendees', [])[:4]) or 'no attendees'}"
+                for i, ev in enumerate(events, 1)
+            )
+
+        _MODEL = "claude-haiku-4-5-20251001"
+        prompt = _TASKS_USER.format(
+            today=today.strftime("%A, %B %-d, %Y"),
+            email_count=len(emails),
+            email_data=email_data,
+            today_event_count=len(today_schedule),
+            today_event_data=_fmt_events(today_schedule),
+            tomorrow_event_count=len(tomorrow_schedule),
+            tomorrow_event_data=_fmt_events(tomorrow_schedule),
+        )
+        _prompt_chars = len(_TASKS_SYSTEM) + len(prompt)
+        _approx_tokens = _prompt_chars // 4
+        print(f"[/api/extract-tasks] model={_MODEL}  prompt≈{_approx_tokens:,} tokens  ({_prompt_chars:,} chars)  t={time.perf_counter()-t0:.2f}s", flush=True)
+
+        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        t_claude = time.perf_counter()
+        print(f"[/api/extract-tasks] Claude API call start  t={time.perf_counter()-t0:.2f}s", flush=True)
+        response = client.messages.create(
+            model=_MODEL,
+            max_tokens=2048,
+            system=_TASKS_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        print(f"[/api/extract-tasks] Claude API call done   t={time.perf_counter()-t0:.2f}s  ({time.perf_counter()-t_claude:.2f}s)  input_tokens={response.usage.input_tokens}  output_tokens={response.usage.output_tokens}", flush=True)
+
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+        tasks = json.loads(raw)
+        print(f"[/api/extract-tasks] done  {len(tasks)} tasks  total={time.perf_counter()-t0:.2f}s", flush=True)
+        return jsonify({"ok": True, "tasks": tasks})
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/create-task", methods=["POST"])
+def create_task():
+    """Create a single task in the Notion database."""
+    t0 = time.perf_counter()
+    body = request.get_json(force=True) or {}
+    task_name = body.get("name", "Untitled task")
+    print(f"[/api/create-task] start  name={task_name!r}  t={time.perf_counter()-t0:.2f}s", flush=True)
+    try:
+        due_date = None
+        if body.get("due_date"):
+            try:
+                due_date = date.fromisoformat(body["due_date"])
+            except ValueError:
+                pass
+
+        task = NotionTask(
+            name=task_name,
+            priority=body.get("priority", "Normal"),
+            source=body.get("source", "Email"),
+            source_detail=body.get("source_detail", ""),
+            due_date=due_date,
+            url=body.get("url") or "",
+        )
+        notion = NotionSource()
+        t_notion = time.perf_counter()
+        print(f"[/api/create-task] Notion API call start  t={time.perf_counter()-t0:.2f}s", flush=True)
+        page_url = notion.create_task(task)
+        print(f"[/api/create-task] Notion API call done   t={time.perf_counter()-t0:.2f}s  ({time.perf_counter()-t_notion:.2f}s)", flush=True)
+        print(f"[/api/create-task] done  total={time.perf_counter()-t0:.2f}s", flush=True)
+        return jsonify({"ok": True, "url": page_url})
+    except Exception as exc:
+        traceback.print_exc()
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 

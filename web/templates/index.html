@@ -538,6 +538,69 @@ section { margin-bottom: 44px; }
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* ── Task cards ───────────────────────────────────────────────────────── */
+.task-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 8px;
+  transition: border-color 0.15s, opacity 0.25s;
+  border-left-width: 3px;
+  border-left-color: var(--border);
+}
+.task-card:hover { border-color: var(--border-2); }
+.task-card.urgent  { border-left-color: var(--red); }
+.task-card.high    { border-left-color: var(--yellow); }
+.task-card.normal  { border-left-color: var(--blue); }
+.task-card.done    { opacity: 0.28; pointer-events: none; }
+
+.task-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-name { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.45; }
+
+.priority-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.priority-pill.urgent { background: rgba(255,68,85,0.12);  color: var(--red); }
+.priority-pill.high   { background: rgba(255,204,51,0.12); color: var(--yellow); }
+.priority-pill.normal { background: rgba(68,153,255,0.10); color: var(--blue); }
+
+.task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 10px;
+}
+
+.task-reason {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 7px;
+  font-style: italic;
+  line-height: 1.5;
+}
+
+.tasks-generate-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 /* ── Responsive ───────────────────────────────────────────────────────── */
 @media (max-width: 860px) {
   .overview-grid { grid-template-columns: 1fr; }
@@ -668,6 +731,24 @@ section { margin-bottom: 44px; }
           <span class="section-badge" id="meetings-badge">0</span>
         </div>
         <div id="meetings-list"></div>
+      </section>
+
+      <!-- ── Section 4: Notion Tasks ───────────────────────────────────── -->
+      <section>
+        <div class="section-header">
+          <span class="section-label">Notion Tasks</span>
+          <div class="section-rule"></div>
+          <span class="section-badge" id="tasks-badge" style="display:none"></span>
+          <div class="tasks-generate-wrap">
+            <button class="btn btn-green-outline" id="generate-tasks-btn" onclick="generateTasks()">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+              Generate Tasks
+            </button>
+          </div>
+        </div>
+        <div id="tasks-list">
+          <div class="empty" id="tasks-placeholder">Click "Generate Tasks" to extract action items from your inbox and calendar.</div>
+        </div>
       </section>
 
     </div><!-- /dashboard -->
@@ -1177,6 +1258,126 @@ async function handleUpdateEvent(btn) {
 function skipMeeting(btn) {
   const i    = parseInt(btn.dataset.idx);
   const card = el(`mc-${i}`);
+  card.classList.add('done');
+  setTimeout(() => { card.style.display = 'none'; }, 280);
+}
+
+// ── Notion Tasks ─────────────────────────────────────────────────────────────
+
+let _tasks = [];  // proposed tasks from /api/extract-tasks
+
+async function generateTasks() {
+  console.log('[generateTasks] fired — _data:', _data);
+  if (!_data) {
+    el('tasks-list').innerHTML =
+      '<div class="error-card"><div class="error-msg">⚠ Dashboard data not loaded yet. Please wait for the page to finish loading and try again.</div></div>';
+    hide('tasks-placeholder');
+    return;
+  }
+
+  const btn = el('generate-tasks-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spinner-sm"></div> Extracting…';
+
+  el('tasks-list').innerHTML =
+    '<div class="ai-loading"><div class="spinner-sm"></div><span>Asking Claude to extract action items…</span></div>';
+
+  try {
+    const res  = await fetch('/api/extract-tasks', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(_data),
+    });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Extraction failed');
+
+    _tasks = json.tasks || [];
+    renderTasks();
+  } catch (err) {
+    el('tasks-list').innerHTML =
+      `<div class="error-card"><div class="error-msg">⚠ ${h(err.message)}</div></div>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg> Regenerate`;
+  }
+}
+
+function renderTasks() {
+  const badge = el('tasks-badge');
+  badge.textContent = `${_tasks.length} task${_tasks.length !== 1 ? 's' : ''}`;
+  badge.style.display = '';
+
+  const container = el('tasks-list');
+  if (!_tasks.length) {
+    container.innerHTML = '<div class="empty">No action items found in your inbox or calendar.</div>';
+    return;
+  }
+
+  container.innerHTML = _tasks.map((task, i) => {
+    const prio     = (task.priority || 'Normal').toLowerCase();
+    const prioText = task.priority || 'Normal';
+    const due      = task.due_date || null;
+
+    return `
+      <div class="task-card ${h(prio)}" id="tc-${i}">
+        <div class="task-header">
+          <div class="task-name">${h(task.name)}</div>
+          <span class="priority-pill ${h(prio)}">${h(prioText)}</span>
+        </div>
+        <div class="task-meta">
+          <div class="meta-item">
+            <span class="meta-label">Source</span>
+            <span class="meta-value">${h(task.source || '—')}</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">From / Meeting</span>
+            <span class="meta-value">${h(task.source_detail || '—')}</span>
+          </div>
+          ${due ? `<div class="meta-item">
+            <span class="meta-label">Due</span>
+            <span class="meta-value">${h(due)}</span>
+          </div>` : ''}
+        </div>
+        ${task.reason ? `<div class="task-reason">${h(task.reason)}</div>` : ''}
+        <div class="card-actions" id="ta-${i}">
+          <button class="btn btn-green-outline" data-idx="${i}" onclick="handleCreateTask(this)">Create in Notion</button>
+          <button class="btn btn-ghost"         data-idx="${i}" onclick="skipTask(this)">Skip</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function handleCreateTask(btn) {
+  const i    = parseInt(btn.dataset.idx);
+  const task = _tasks[i];
+
+  btn.disabled = true;
+  btn.textContent = 'Creating…';
+
+  try {
+    const res  = await fetch('/api/create-task', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(task),
+    });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error);
+
+    el(`ta-${i}`).innerHTML = `
+      <span class="badge badge-added">✓ Created in Notion</span>
+      ${json.url ? `<a href="${h(json.url)}" target="_blank" style="font-size:11px;color:var(--green)">Open in Notion →</a>` : ''}`;
+    el(`tc-${i}`).classList.add('done');
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Create in Notion';
+    el(`ta-${i}`).insertAdjacentHTML('afterbegin',
+      `<span class="badge badge-error">⚠ ${h(err.message)}</span>`);
+  }
+}
+
+function skipTask(btn) {
+  const i    = parseInt(btn.dataset.idx);
+  const card = el(`tc-${i}`);
   card.classList.add('done');
   setTimeout(() => { card.style.display = 'none'; }, 280);
 }
