@@ -1,0 +1,21 @@
+# Credentials and tokens — never commit these
+credentials/token.json
+credentials/client_secret.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# Environment
+.env
+
+# IDE
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chief-of-staff"
+version = "0.1.0"
+description = "AI Chief of Staff — unified briefing engine for a startup CEO"
+requires-python = ">=3.11"
+dependencies = [
+    # Google APIs
+    "google-auth>=2.29",
+    "google-auth-oauthlib>=1.2",
+    "google-auth-httplib2>=0.2",
+    "google-api-python-client>=2.127",
+    # MCP server framework
+    "mcp>=1.0",
+    # Anthropic SDK (for briefing generation)
+    "anthropic>=0.28",
+    # Utilities
+    "python-dotenv>=1.0",
+    "pydantic>=2.7",
+    "rich>=13.7",          # pretty terminal output
+    "flask>=3.0",          # web dashboard
+]
+
+[project.scripts]
+cos-auth    = "auth.google_auth:main"
+cos-brief   = "main:run_morning_briefing"
+cos-gmail   = "mcp_servers.gmail_server:main"
+cos-calendar = "mcp_servers.calendar_server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
