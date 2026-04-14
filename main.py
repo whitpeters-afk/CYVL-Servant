@@ -7,6 +7,7 @@ Usage:
     python main.py scan-events     # Review and add detected meeting requests to calendar
     python main.py serve           # Start the web dashboard (http://localhost:5000)
     python main.py auth            # Run Google OAuth flow
+    python main.py tasks           # Extract action items and push to Notion
 """
 import asyncio
 import sys
@@ -42,6 +43,11 @@ def run_serve():
     app.run(debug=False, port=port)
 
 
+def run_tasks():
+    from briefing.tasks import run_tasks as _run
+    asyncio.run(_run())
+
+
 def run_auth():
     from auth.google_auth import main as auth_main
     auth_main()
@@ -61,9 +67,11 @@ def main():
         run_scan_events()
     elif cmd == "serve":
         run_serve()
+    elif cmd == "tasks":
+        run_tasks()
     else:
         print(f"Unknown command: {cmd}")
-        print("Usage: python main.py [auth|briefing|triage|replies|scan-events|serve]")
+        print("Usage: python main.py [auth|briefing|triage|replies|scan-events|serve|tasks]")
         sys.exit(1)
 
 

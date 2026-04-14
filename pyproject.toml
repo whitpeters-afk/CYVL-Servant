@@ -22,6 +22,7 @@ dependencies = [
     "pydantic>=2.7",
     "rich>=13.7",          # pretty terminal output
     "flask>=3.0",          # web dashboard
+    "notion-client>=2.2",  # Notion API
 ]
 
 [project.scripts]
