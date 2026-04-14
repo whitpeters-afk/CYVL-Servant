@@ -2,6 +2,7 @@
 AI Chief of Staff — entry point.
 
 Usage:
+    python main.py morning         # Full CEO morning routine (briefing → replies → scan-events → tasks)
     python main.py briefing        # Generate morning briefing
     python main.py replies         # Review and send AI-drafted email replies
     python main.py scan-events     # Review and add detected meeting requests to calendar
@@ -53,10 +54,29 @@ def run_auth():
     auth_main()
 
 
+def run_morning():
+    """Full CEO morning routine: briefing → replies → scan-events → tasks."""
+    run_morning_briefing()
+
+    answer = input("\nHandle replies? [yes/no] ").strip().lower()
+    if answer in ("yes", "y"):
+        run_replies()
+
+    answer = input("\nCheck for meeting requests? [yes/no] ").strip().lower()
+    if answer in ("yes", "y"):
+        run_scan_events()
+
+    answer = input("\nCreate tasks in Notion? [yes/no] ").strip().lower()
+    if answer in ("yes", "y"):
+        run_tasks()
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "briefing"
     if cmd == "auth":
         run_auth()
+    elif cmd == "morning":
+        run_morning()
     elif cmd == "briefing":
         run_morning_briefing()
     elif cmd == "triage":
@@ -71,7 +91,7 @@ def main():
         run_tasks()
     else:
         print(f"Unknown command: {cmd}")
-        print("Usage: python main.py [auth|briefing|triage|replies|scan-events|serve|tasks]")
+        print("Usage: python main.py [auth|morning|briefing|triage|replies|scan-events|serve|tasks]")
         sys.exit(1)
 
 
