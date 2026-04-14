@@ -2,9 +2,10 @@
 Gmail data source adapter.
 
 Wraps the Gmail REST API and returns normalized SourceItems.
+Simple sequential implementation — no batching, no async, no threads.
 """
 import base64
-import email as email_lib
+import email.mime.text
 from datetime import datetime, timezone
 from typing import Any
 
@@ -15,14 +16,13 @@ from auth.google_auth import get_credentials
 from sources.base import DataSource, SourceItem
 
 
-def _build_authorized_http(creds):
-    """Return a requests-based authorized http transport for googleapiclient."""
+def _build_http(creds):
+    """Requests-based authorized HTTP transport for googleapiclient."""
     session = AuthorizedSession(creds)
 
     class _RequestsHttp:
-        """Thin httplib2-compatible shim over requests.Session."""
         def request(self, uri, method="GET", body=None, headers=None, **kwargs):
-            resp = session.request(method, uri, data=body, headers=headers, timeout=60)
+            resp = session.request(method, uri, data=body, headers=headers, timeout=30)
             resp.status = resp.status_code
             return resp, resp.content
 
@@ -33,9 +33,8 @@ _URGENT_LABELS = {"IMPORTANT", "STARRED"}
 
 
 def _decode_body(payload: dict) -> str:
-    """Extract plain-text body from a Gmail message payload."""
-    mime_type = payload.get("mimeType", "")
-    if mime_type == "text/plain":
+    """Recursively extract plain-text body from a Gmail message payload."""
+    if payload.get("mimeType") == "text/plain":
         data = payload.get("body", {}).get("data", "")
         return base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="replace")
     for part in payload.get("parts", []):
@@ -62,13 +61,11 @@ def _participants(headers: list[dict]) -> list[str]:
 
 
 class GmailSource(DataSource):
-    """Fetches emails from Gmail."""
-
     name = "gmail"
 
     def __init__(self) -> None:
         creds = get_credentials()
-        self._service = build("gmail", "v1", http=_build_authorized_http(creds))
+        self._service = build("gmail", "v1", http=_build_http(creds))
 
     async def fetch_items(
         self,
@@ -77,10 +74,10 @@ class GmailSource(DataSource):
         metadata_only: bool = False,
         **kwargs,
     ) -> list[SourceItem]:
-        """Fetch emails matching `query` sequentially."""
         list_resp = self._service.users().messages().list(
             userId="me", q=query, maxResults=max_results
         ).execute()
+
         msg_refs = list_resp.get("messages", [])
         if not msg_refs:
             return []
@@ -96,7 +93,9 @@ class GmailSource(DataSource):
                 ).execute()
             else:
                 msg = self._service.users().messages().get(
-                    userId="me", id=ref["id"], format="full"
+                    userId="me",
+                    id=ref["id"],
+                    format="full",
                 ).execute()
             msgs.append(msg)
 
@@ -108,16 +107,9 @@ class GmailSource(DataSource):
         ts_ms = int(msg.get("internalDate", 0))
         timestamp = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc) if ts_ms else None
 
-        priority = "urgent" if labels & _URGENT_LABELS else "normal"
-
-        # When fetched with format="metadata", payload has no body parts — use
-        # the top-level snippet field instead of trying to decode an empty body.
         payload = msg.get("payload", {})
-        has_body_parts = bool(payload.get("body", {}).get("data") or payload.get("parts"))
-        if has_body_parts:
-            body = _decode_body(payload)
-        else:
-            body = msg.get("snippet", "")
+        has_body = bool(payload.get("body", {}).get("data") or payload.get("parts"))
+        body = _decode_body(payload) if has_body else msg.get("snippet", "")
 
         return SourceItem(
             id=msg["id"],
@@ -128,19 +120,15 @@ class GmailSource(DataSource):
             timestamp=timestamp,
             participants=_participants(headers),
             labels=list(labels),
-            priority=priority,
+            priority="urgent" if labels & _URGENT_LABELS else "normal",
             url=f"https://mail.google.com/mail/u/0/#inbox/{msg['id']}",
             raw=msg,
         )
 
     def get_thread(self, thread_id: str) -> list[SourceItem]:
-        """Fetch all messages in a thread."""
-        thread = (
-            self._service.users()
-            .threads()
-            .get(userId="me", id=thread_id, format="full")
-            .execute()
-        )
+        thread = self._service.users().threads().get(
+            userId="me", id=thread_id, format="full"
+        ).execute()
         return [self._to_source_item(m) for m in thread.get("messages", [])]
 
     def send_message(
@@ -151,8 +139,6 @@ class GmailSource(DataSource):
         reply_to_msg_id: str | None = None,
         thread_id: str | None = None,
     ) -> dict:
-        """Send an email. Returns the sent message resource."""
-        import email.mime.text
         mime = email.mime.text.MIMEText(body)
         mime["to"] = to
         mime["subject"] = subject
@@ -163,9 +149,6 @@ class GmailSource(DataSource):
         send_body: dict = {"raw": raw}
         if thread_id:
             send_body["threadId"] = thread_id
-        return (
-            self._service.users()
-            .messages()
-            .send(userId="me", body=send_body)
-            .execute()
-        )
+        return self._service.users().messages().send(
+            userId="me", body=send_body
+        ).execute()
