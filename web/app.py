@@ -6,6 +6,15 @@ Run from the project root:
     # or
     flask --app web.app run --port 5000
 """
+# Force IPv4 for outbound HTTP — IPv6 path to Google stalls ~40s per connect,
+# cascading into multi-minute hangs on every Gmail/Calendar call. Must run
+# before any module that creates sockets.
+import socket as _socket
+_orig_getaddrinfo = _socket.getaddrinfo
+def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    return _orig_getaddrinfo(host, port, _socket.AF_INET, type, proto, flags)
+_socket.getaddrinfo = _ipv4_only_getaddrinfo
+
 import asyncio
 import json
 import os
@@ -58,7 +67,22 @@ Rules:
 - today_schedule: attendee_has_email=true if that attendee also sent an unread email.
 - flags: [] if nothing to flag.
 - inbox: every email in exactly one category; draft_reply only for urgent/needs_reply.
-- meeting_requests: Capture ANY email that contains scheduling intent — this includes: explicit meeting requests ("let's meet", "can we connect", "I'd like to schedule"), questions about availability ("are you free", "what times work", "do you have time"), requests to reschedule or move an existing meeting, invitations to calls, demos, or site visits, and any email where a date/time is proposed or asked about. When in doubt, include it. is_reschedule=true for reschedule/move asks; [] only if there is genuinely no scheduling intent in any email."""
+- meeting_requests: Capture ANY email that contains scheduling intent — this includes: explicit meeting requests ("let's meet", "can we connect", "I'd like to schedule"), questions about availability ("are you free", "what times work", "do you have time"), requests to reschedule or move an existing meeting, invitations to calls, demos, or site visits, and any email where a date/time is proposed or asked about. When in doubt, include it. is_reschedule=true for reschedule/move asks; [] only if there is genuinely no scheduling intent in any email.
+- Time resolution for meeting_requests: If the email proposes a concrete day + time (e.g. "Thursday at 2:00 PM", "tomorrow 10am", "next Tuesday 3pm", "March 14 at 9"), you MUST compute proposed_start_iso as an ISO 8601 datetime in America/New_York (format: YYYY-MM-DDTHH:MM:SS-04:00 or -05:00 depending on DST), set proposed_end_iso = start + duration_minutes, and set is_time_clear=true. Use "Today is {today}" from the user message to resolve relative weekdays — "Thursday" means the next Thursday on or after today. Only set is_time_clear=false and proposed_start_iso=null when the email is genuinely vague ("sometime next week", "when you're free"). Do NOT leave is_time_clear=false just because parsing feels hard — resolve the date.
+
+Examples (assume "Today is Wednesday, April 15, 2026"):
+  email body: "Can we schedule a call Thursday at 2:00 PM"
+    → proposed_start_iso="2026-04-16T14:00:00-04:00", proposed_end_iso="2026-04-16T15:00:00-04:00", duration_minutes=60, is_time_clear=true
+  email body: "Could we set up a meeting Tuesday at 3:00 PM to discuss a pilot integration"
+    → proposed_start_iso="2026-04-21T15:00:00-04:00", proposed_end_iso="2026-04-21T16:00:00-04:00", duration_minutes=60, is_time_clear=true
+  email body: "Happy to do a prep call Friday at 11:00 AM if that helps"
+    → proposed_start_iso="2026-04-17T11:00:00-04:00", proposed_end_iso="2026-04-17T12:00:00-04:00", duration_minutes=60, is_time_clear=true
+  email body: "Could we set up a demo for our team Wednesday at 10:00 AM"
+    → proposed_start_iso="2026-04-22T10:00:00-04:00", proposed_end_iso="2026-04-22T11:00:00-04:00", duration_minutes=60, is_time_clear=true
+  email body: "Let's find time to chat sometime next week"
+    → proposed_start_iso=null, is_time_clear=false
+
+Apply the same logic to every email regardless of phrasing ("can we meet", "let's schedule", "happy to chat", "could we set up", "happy to do", etc.) — the trigger is any concrete weekday + time."""
 
 _DASHBOARD_USER = """\
 Today is {today}. Tomorrow is {tomorrow}.
@@ -234,7 +258,7 @@ async def _analyze_data(raw_data: dict) -> dict:
 
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
-    _MODEL = "claude-haiku-4-5-20251001"
+    _MODEL = "claude-sonnet-4-6"
     _prompt_chars = len(_DASHBOARD_SYSTEM) + len(prompt)
     # Rough token estimate: ~4 chars per token
     _approx_tokens = _prompt_chars // 4
