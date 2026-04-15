@@ -143,6 +143,15 @@ header .container {
 }
 .btn-ghost:hover { color: var(--text-dim); }
 
+.time-input {
+  background: var(--bg-dim);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
 .btn-refresh {
   background: transparent;
   border-color: var(--border-2);
@@ -1149,7 +1158,9 @@ function renderMeetings() {
         <button class="btn btn-ghost"         data-idx="${i}" onclick="skipMeeting(this)">Skip</button>`;
     } else {
       actionsHtml = `
-        <button class="btn btn-ghost" data-idx="${i}" onclick="skipMeeting(this)">Skip</button>`;
+        <input type="datetime-local" class="time-input" id="mt-${i}" data-idx="${i}">
+        <button class="btn btn-green-outline" data-idx="${i}" onclick="handleAddEventManual(this)">Add to Calendar</button>
+        <button class="btn btn-ghost"         data-idx="${i}" onclick="skipMeeting(this)">Skip</button>`;
     }
 
     const guests = (req.attendees || []).slice(0, 3).join(', ');
@@ -1220,6 +1231,18 @@ async function handleAddEvent(btn, isCreateNew) {
     el(`ma-${i}`).insertAdjacentHTML('afterbegin',
       `<span class="badge badge-error">⚠ ${h(err.message)}</span>`);
   }
+}
+
+function handleAddEventManual(btn) {
+  const i     = parseInt(btn.dataset.idx);
+  const input = el(`mt-${i}`);
+  if (!input.value) { input.focus(); return; }
+  const req   = _data.meeting_requests[i];
+  const start = new Date(input.value);
+  const end   = new Date(start.getTime() + (req.duration_minutes || 60) * 60000);
+  req.proposed_start_iso = start.toISOString();
+  req.proposed_end_iso   = end.toISOString();
+  handleAddEvent(btn, false);
 }
 
 async function handleUpdateEvent(btn) {
