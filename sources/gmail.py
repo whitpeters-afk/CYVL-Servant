@@ -6,6 +6,7 @@ Simple sequential implementation — no batching, no async, no threads.
 """
 import base64
 import email.mime.text
+import time as _time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -22,11 +23,31 @@ def _build_http(creds):
 
     class _RequestsHttp:
         def request(self, uri, method="GET", body=None, headers=None, **kwargs):
-            resp = session.request(method, uri, data=body, headers=headers, timeout=30)
+            resp = session.request(method, uri, data=body, headers=headers, timeout=120)
             resp.status = resp.status_code
             return resp, resp.content
 
     return _RequestsHttp()
+
+
+# Module-level cache — build() fetches the discovery document over the network.
+# Caching avoids one extra round-trip on every request.
+_service_cache: Any = None
+
+def _get_service():
+    global _service_cache
+    if _service_cache is None:
+        print("[gmail] get_credentials() start", flush=True)
+        t0 = _time.perf_counter()
+        creds = get_credentials()
+        print(f"[gmail] get_credentials() done {_time.perf_counter()-t0:.2f}s", flush=True)
+        print("[gmail] discovery.build() start", flush=True)
+        t1 = _time.perf_counter()
+        _service_cache = build("gmail", "v1", http=_build_http(creds))
+        print(f"[gmail] discovery.build() done {_time.perf_counter()-t1:.2f}s", flush=True)
+    else:
+        print("[gmail] using cached service", flush=True)
+    return _service_cache
 
 
 _URGENT_LABELS = {"IMPORTANT", "STARRED"}
@@ -64,8 +85,7 @@ class GmailSource(DataSource):
     name = "gmail"
 
     def __init__(self) -> None:
-        creds = get_credentials()
-        self._service = build("gmail", "v1", http=_build_http(creds))
+        self._service = _get_service()
 
     async def fetch_items(
         self,
@@ -74,16 +94,20 @@ class GmailSource(DataSource):
         metadata_only: bool = False,
         **kwargs,
     ) -> list[SourceItem]:
+        print(f"[gmail] messages.list() start", flush=True)
+        t_list = _time.perf_counter()
         list_resp = self._service.users().messages().list(
             userId="me", q=query, maxResults=max_results
         ).execute()
+        print(f"[gmail] messages.list() done {_time.perf_counter()-t_list:.2f}s", flush=True)
 
         msg_refs = list_resp.get("messages", [])
         if not msg_refs:
             return []
 
         msgs = []
-        for ref in msg_refs:
+        for n, ref in enumerate(msg_refs):
+            t_msg = _time.perf_counter()
             if metadata_only:
                 msg = self._service.users().messages().get(
                     userId="me",
@@ -97,6 +121,7 @@ class GmailSource(DataSource):
                     id=ref["id"],
                     format="full",
                 ).execute()
+            print(f"[gmail] msg {n+1}/{len(msg_refs)} id={ref['id']} {_time.perf_counter()-t_msg:.2f}s", flush=True)
             msgs.append(msg)
 
         return [self._to_source_item(msg) for msg in msgs]

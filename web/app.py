@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone, timedelta
 from email.utils import parseaddr
 from pathlib import Path
@@ -92,10 +93,17 @@ async def _fetch_raw_data() -> dict:
 
     try:
         print(f"[/api/data] Gmail+Calendar fetch start  t={time.perf_counter()-t0:.2f}s", flush=True)
-        emails, all_events = await asyncio.gather(
-            gmail.fetch_items(max_results=20, metadata_only=True),
-            calendar.fetch_items(days_ahead=2),
-        )
+        def _fetch_gmail():
+            import asyncio as _asyncio
+            return _asyncio.run(gmail.fetch_items(max_results=20, metadata_only=True))
+        def _fetch_calendar():
+            import asyncio as _asyncio
+            return _asyncio.run(calendar.fetch_items(days_ahead=2))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_gmail    = pool.submit(_fetch_gmail)
+            f_calendar = pool.submit(_fetch_calendar)
+            emails     = f_gmail.result()
+            all_events = f_calendar.result()
         print(f"[/api/data] Gmail done ({len(emails)} emails)  Calendar done ({len(all_events)} events)  t={time.perf_counter()-t0:.2f}s", flush=True)
     except Exception as exc:
         raise RuntimeError(f"Could not reach Gmail or Google Calendar: {exc}") from exc
@@ -273,55 +281,6 @@ async def _analyze_data(raw_data: dict) -> dict:
             "_email_thread_map": raw_data.get("_email_thread_map", {}),
             "_parse_error": True,
         }
-
-    # Enrich meeting requests with live conflict + existing-event data.
-    # Calendar is only instantiated here if there are meeting requests to check.
-    meeting_requests = data.get("meeting_requests", [])
-    if meeting_requests:
-        try:
-            calendar = GoogleCalendarSource()
-        except Exception:
-            calendar = None
-
-        for req in meeting_requests:
-            req["conflict_info"] = None
-            req["existing_event_id"] = None
-            req["existing_event_time"] = None
-
-            if not calendar:
-                continue
-
-            start_iso = req.get("proposed_start_iso")
-            end_iso = req.get("proposed_end_iso")
-
-            if start_iso and req.get("is_time_clear"):
-                try:
-                    start_dt = datetime.fromisoformat(start_iso).astimezone(timezone.utc)
-                    dur = req.get("duration_minutes", 60)
-                    end_dt = (
-                        datetime.fromisoformat(end_iso).astimezone(timezone.utc)
-                        if end_iso else start_dt + timedelta(minutes=dur)
-                    )
-                    conflicts = calendar.check_conflicts(start_dt, end_dt)
-
-                    if req.get("is_reschedule") and req.get("original_event_title"):
-                        keyword = (req["original_event_title"] or "").split()[0]
-                        candidates = calendar.find_events_by_keyword(keyword)
-                        if candidates:
-                            existing = candidates[0]
-                            req["existing_event_id"] = existing.id
-                            req["existing_event_time"] = (
-                                existing.timestamp.astimezone().strftime("%a %b %-d, %-I:%M %p")
-                                if existing.timestamp else None
-                            )
-                            conflicts = [c for c in conflicts if c.id != existing.id]
-
-                    if conflicts:
-                        req["conflict_info"] = {"has_conflict": True, "names": [c.title for c in conflicts]}
-                    else:
-                        req["conflict_info"] = {"has_conflict": False}
-                except (ValueError, KeyError):
-                    pass
 
     result = {
         **data,
