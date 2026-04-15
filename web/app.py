@@ -91,11 +91,12 @@ async def _fetch_raw_data() -> dict:
         raise RuntimeError(f"Failed to initialize Google API clients: {exc}") from exc
 
     try:
-        print(f"[/api/data] Gmail fetch start  t={time.perf_counter()-t0:.2f}s", flush=True)
-        emails = await gmail.fetch_items(max_results=20, metadata_only=True)
-        print(f"[/api/data] Gmail done ({len(emails)} emails)  t={time.perf_counter()-t0:.2f}s", flush=True)
-        all_events = await calendar.fetch_items(days_ahead=2)
-        print(f"[/api/data] Calendar done ({len(all_events)} events)  t={time.perf_counter()-t0:.2f}s", flush=True)
+        print(f"[/api/data] Gmail+Calendar fetch start  t={time.perf_counter()-t0:.2f}s", flush=True)
+        emails, all_events = await asyncio.gather(
+            gmail.fetch_items(max_results=20, metadata_only=True),
+            calendar.fetch_items(days_ahead=2),
+        )
+        print(f"[/api/data] Gmail done ({len(emails)} emails)  Calendar done ({len(all_events)} events)  t={time.perf_counter()-t0:.2f}s", flush=True)
     except Exception as exc:
         raise RuntimeError(f"Could not reach Gmail or Google Calendar: {exc}") from exc
 
