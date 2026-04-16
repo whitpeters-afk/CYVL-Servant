@@ -16,7 +16,7 @@ CYVL Servant acts as an AI Chief of Staff — it reads across all the CEO's tool
 
 ## Demo
 
-[Link to screen recording here]
+https://youtu.be/MnUgz6HwuYA
 
 ## Architecture
 
