@@ -136,7 +136,7 @@ This project was built entirely using Claude Code with MCP integrations. My proc
 4. **Slash commands** — Set up /briefing, /triage, /replies, /scan-events, /tasks for quick access in Claude Code
 5. **Debugging with AI** — Used Claude Code to diagnose API issues, fix edge cases (like reschedule detection), and optimize performance
 
-Key lesson: small, specific prompts with one change at a time produce much better results than large multi-part requests.
+A big lesson that I learned was that small, specific prompts with one change at a time produce much better results than large multi-part requests.
 
 ## Project Structure
 
